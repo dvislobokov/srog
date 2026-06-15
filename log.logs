@@ -1,0 +1,3 @@
+{"level":"error","error":"some error","@mt":"something bad happened","time":"2026-06-15T13:42:33+03:00","message":"something bad happened"}
+{"level":"error","error":"some error","stack":"main.main\n\tC:/Users/dvislobokov/GolandProjects/srog/cmd/main.go:23","@mt":"something bad happened","time":"2026-06-15T13:43:02+03:00","caller":"C:/Users/dvislobokov/GolandProjects/srog/srog.go:266","message":"something bad happened"}
+{"level":"error","error":"some error","stack":"main.main\n\tC:/Users/dvislobokov/GolandProjects/srog/cmd/main.go:23","@mt":"something bad happened","time":"2026-06-15T13:54:44+03:00","caller":"C:/Users/dvislobokov/GolandProjects/srog/srog.go:266","message":"something bad happened"}

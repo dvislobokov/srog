@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go version *)",
+      "Bash(go env *)",
+      "Bash(go list *)",
+      "Bash(go get *)",
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(go test *)",
+      "Bash(gofmt -l .)",
+      "Bash(go mod *)",
+      "Bash(go run *)",
+      "Bash(ls \"$\\(go env GOMODCACHE\\)/google.golang.org\")"
+    ]
+  }
+}
