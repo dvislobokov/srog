@@ -2,7 +2,7 @@ package main
 
 import (
 	"errors"
-	"srog"
+	"github.com/dvislobokov/srog"
 )
 
 type Person struct {

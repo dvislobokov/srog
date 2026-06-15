@@ -1,4 +1,4 @@
-module srog
+module github.com/dvislobokov/srog
 
 go 1.25.0
 
