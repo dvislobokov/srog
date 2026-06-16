@@ -78,7 +78,7 @@ raw template so log pipelines can group events by their template identity — ex
 ## 📥 Install
 
 ```bash
-go get srog
+go get github.com/dvislobokov/srog
 ```
 
 > Requires Go 1.23+. The core package and `srog/sroghttp` depend only on
