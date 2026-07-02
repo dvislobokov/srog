@@ -55,24 +55,28 @@ func callerString() string {
 	}
 }
 
-// captureStack records the call stack starting skip frames above runtime.Callers
-// (skip=1 is captureStack's own caller) and formats it as a conventional Go
-// stack-trace string:
+// captureStack formats the current goroutine's stack, beginning at the first
+// frame outside this package, as a conventional Go stack-trace string:
 //
 //	main.startup
 //		/app/cmd/main.go:16
 //	main.main
 //		/app/cmd/main.go:24
 //
-// It returns "" when no frames are available.
-func captureStack(skip int) string {
+// Leading srog-core frames (write, the level methods, and the package-level
+// *Ctx wrappers) are stripped so the trace starts at the code that logged —
+// regardless of how many wrapper frames or inlining sit in between. It returns
+// "" when no frames are available.
+func captureStack() string {
 	var pcs [maxStackDepth]uintptr
-	n := runtime.Callers(skip+1, pcs[:])
+	// Skip runtime.Callers and captureStack; begin at captureStack's caller.
+	n := runtime.Callers(2, pcs[:])
 	if n == 0 {
 		return ""
 	}
 	frames := runtime.CallersFrames(pcs[:n])
 	var b strings.Builder
+	skipping := true
 	for {
 		f, more := frames.Next()
 		if f.Function == "" {
@@ -81,6 +85,17 @@ func captureStack(skip int) string {
 		// Stop at the runtime entrypoints; they add noise.
 		if f.Function == "runtime.main" || f.Function == "runtime.goexit" {
 			break
+		}
+		// Drop srog's own leading plumbing frames so the trace starts at the
+		// caller; once a non-core frame is seen, keep everything above it.
+		if skipping {
+			if isSrogCore(f.Function) {
+				if !more {
+					break
+				}
+				continue
+			}
+			skipping = false
 		}
 		if b.Len() > 0 {
 			b.WriteByte('\n')

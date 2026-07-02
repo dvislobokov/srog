@@ -353,9 +353,9 @@ func (l *Logger) write(level zerolog.Level, err error, tmpl string, args []any) 
 	if err != nil {
 		ev = ev.Err(err)
 		if l.stack {
-			// Skip captureStack, write, and the level method so the trace
-			// begins at the caller's frame.
-			if stack := captureStack(3); stack != "" {
+			// captureStack strips srog's own leading frames, so the trace begins
+			// at the caller regardless of any *Ctx wrapper in between.
+			if stack := captureStack(); stack != "" {
 				ev = ev.Str(stackFieldName, stack)
 			}
 		}
