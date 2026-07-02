@@ -17,6 +17,10 @@ const (
 	// FormatConsole writes colorized, human-friendly lines with structured
 	// parameters omitted (they remain available via a JSON sink).
 	FormatConsole
+	// FormatECS writes NDJSON using Elastic Common Schema field names
+	// (@timestamp, log.level, error.message, ...), so events index cleanly into
+	// Elasticsearch and render in Kibana without a Logstash mapping.
+	FormatECS
 )
 
 // sinkConfig is the resolved configuration for one output destination.
@@ -26,6 +30,10 @@ type sinkConfig struct {
 	levelSet bool
 	noColor  bool
 	rotation Rotation
+
+	// async, when set, offloads this sink's writes to a background goroutine.
+	async     bool
+	asyncSize int
 
 	// Destination: exactly one of target (in-memory/std streams) or path (file).
 	target io.Writer
@@ -49,12 +57,25 @@ func AsJSON() SinkOption { return func(s *sinkConfig) { s.format = FormatJSON } 
 // AsConsole forces colorized console output for this sink.
 func AsConsole() SinkOption { return func(s *sinkConfig) { s.format = FormatConsole } }
 
+// AsECS forces Elastic Common Schema NDJSON output for this sink (see FormatECS).
+func AsECS() SinkOption { return func(s *sinkConfig) { s.format = FormatECS } }
+
 // NoColor disables ANSI colors for a console sink.
 func NoColor() SinkOption { return func(s *sinkConfig) { s.noColor = true } }
 
 // Rotate enables size/time/age-based rotation for a file sink. It has no effect
 // on non-file sinks.
 func Rotate(r Rotation) SinkOption { return func(s *sinkConfig) { s.rotation = r } }
+
+// Async offloads this sink's writes to a background goroutine backed by a queue
+// of bufferSize events (a non-positive size uses a default). It keeps a slow
+// destination — a file on a busy disk, a network stream — off the request path.
+// If the queue fills the sink drops events rather than block the caller, and
+// reports the total dropped through the error handler (see WithErrorHandler) on
+// Close. Always Close the logger so the queue drains before exit.
+func Async(bufferSize int) SinkOption {
+	return func(s *sinkConfig) { s.async = true; s.asyncSize = bufferSize }
+}
 
 // --- sink-producing logger options ---
 
@@ -120,8 +141,18 @@ func (s sinkConfig) build(gc *config) (io.Writer, io.Closer, error) {
 		w = s.target
 	}
 
-	if s.format == FormatConsole {
+	switch s.format {
+	case FormatConsole:
 		w = consoleWriter{out: w, noColor: s.noColor, showStack: gc.stack}
+	case FormatECS:
+		w = ecsWriter{out: w}
+	}
+
+	if s.async {
+		// The async writer owns the drain and closes the underlying sink itself,
+		// so it becomes both the writer and the sole closer.
+		aw := newAsyncWriter(w, s.asyncSize, gc.onError, closer)
+		return aw, aw, nil
 	}
 
 	return w, closer, nil
@@ -145,6 +176,22 @@ type levelWriter struct {
 }
 
 func (lw levelWriter) Write(p []byte) (int, error) { return lw.w.Write(p) }
+
+// errWriter reports a failed Write to a handler instead of dropping it silently.
+// It returns the original (n, err) so any level-writer machinery upstream still
+// sees the failure.
+type errWriter struct {
+	w     io.Writer
+	onErr func(error)
+}
+
+func (e errWriter) Write(p []byte) (int, error) {
+	n, err := e.w.Write(p)
+	if err != nil && e.onErr != nil {
+		e.onErr(err)
+	}
+	return n, err
+}
 
 func (lw levelWriter) WriteLevel(l zerolog.Level, p []byte) (int, error) {
 	if l != zerolog.NoLevel && l < lw.min {

@@ -2,6 +2,7 @@ package srog
 
 import (
 	"fmt"
+	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -166,11 +167,22 @@ func bindField(ev *zerolog.Event, key string, cap capture, val any) {
 	}
 }
 
-// renderValue appends the formatted scalar representation of val to dst,
-// honoring alignment and (best-effort) format specifiers.
+// renderValue appends the formatted representation of val to dst, honoring the
+// capturing operator (@ destructures, $ stringifies), alignment, and
+// (best-effort) format specifiers.
 func renderValue(dst []byte, tok *token, val any) []byte {
 	start := len(dst)
-	dst = appendValue(dst, tok.format, val)
+	switch tok.capture {
+	case captureStringify:
+		// {$X}: force the scalar string form, matching the JSON side.
+		dst = append(dst, toString(val)...)
+	case captureDestructure:
+		// {@X}: render structure with field names, mirroring the destructured
+		// JSON so the message reads like Serilog's "User { Name: "neo" }".
+		dst = appendDestructured(dst, val)
+	default:
+		dst = appendValue(dst, tok.format, val)
+	}
 
 	// Apply alignment by padding the just-written segment.
 	if tok.align != 0 {
@@ -237,6 +249,103 @@ func appendValue(dst []byte, format string, val any) []byte {
 		return append(dst, v.String()...)
 	default:
 		return append(dst, fmt.Sprint(v)...)
+	}
+}
+
+// maxDestructureDepth bounds recursion when rendering a destructured value, so a
+// cyclic or very deep object cannot blow the stack or the message.
+const maxDestructureDepth = 6
+
+// appendDestructured renders val Serilog-style for a {@X} hole: structs become
+// "TypeName { Field: value, ... }", maps "{ key: value }", slices "[a, b, c]",
+// and strings are quoted. It mirrors the destructured JSON so the human message
+// carries the same field names.
+func appendDestructured(dst []byte, val any) []byte {
+	return appendDestruct(dst, reflect.ValueOf(val), 0)
+}
+
+func appendDestruct(dst []byte, v reflect.Value, depth int) []byte {
+	if !v.IsValid() {
+		return append(dst, "null"...)
+	}
+	if depth >= maxDestructureDepth {
+		return append(dst, "..."...)
+	}
+	// Types with a meaningful scalar form whose fields are unexported (so
+	// reflection would render them empty) short-circuit to that form.
+	if v.CanInterface() {
+		switch iv := v.Interface().(type) {
+		case time.Time:
+			return iv.AppendFormat(dst, time.RFC3339)
+		case time.Duration:
+			return append(dst, iv.String()...)
+		case error:
+			return append(dst, iv.Error()...)
+		}
+	}
+
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if v.IsNil() {
+			return append(dst, "null"...)
+		}
+		return appendDestruct(dst, v.Elem(), depth)
+	case reflect.Struct:
+		if name := v.Type().Name(); name != "" {
+			dst = append(dst, name...)
+			dst = append(dst, ' ')
+		}
+		dst = append(dst, '{')
+		t := v.Type()
+		first := true
+		for i := 0; i < t.NumField(); i++ {
+			if t.Field(i).PkgPath != "" {
+				continue // unexported
+			}
+			if first {
+				dst = append(dst, ' ')
+			} else {
+				dst = append(dst, ',', ' ')
+			}
+			first = false
+			dst = append(dst, t.Field(i).Name...)
+			dst = append(dst, ':', ' ')
+			dst = appendDestruct(dst, v.Field(i), depth+1)
+		}
+		return append(dst, ' ', '}')
+	case reflect.Map:
+		dst = append(dst, '{')
+		first := true
+		for iter := v.MapRange(); iter.Next(); {
+			if first {
+				dst = append(dst, ' ')
+			} else {
+				dst = append(dst, ',', ' ')
+			}
+			first = false
+			dst = appendDestruct(dst, iter.Key(), depth+1)
+			dst = append(dst, ':', ' ')
+			dst = appendDestruct(dst, iter.Value(), depth+1)
+		}
+		return append(dst, ' ', '}')
+	case reflect.Slice, reflect.Array:
+		dst = append(dst, '[')
+		for i := 0; i < v.Len(); i++ {
+			if i > 0 {
+				dst = append(dst, ',', ' ')
+			}
+			dst = appendDestruct(dst, v.Index(i), depth+1)
+		}
+		return append(dst, ']')
+	case reflect.String:
+		dst = append(dst, '"')
+		dst = append(dst, v.String()...)
+		return append(dst, '"')
+	default:
+		if !v.CanInterface() {
+			return append(dst, "<?>"...)
+		}
+		return appendValue(dst, "", v.Interface())
 	}
 }
 

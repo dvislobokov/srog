@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"srog"
-	"srog/sroghttp"
+	"github.com/dvislobokov/srog"
+	"github.com/dvislobokov/srog/sroghttp"
 )
 
 func newLogger() (*srog.Logger, *bytes.Buffer) {

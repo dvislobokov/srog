@@ -1,0 +1,4 @@
+# Built example binaries and their log output.
+*.exe
+*.log
+*.logs

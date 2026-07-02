@@ -9,7 +9,7 @@ import (
 	"context"
 	"time"
 
-	"srog"
+	"github.com/dvislobokov/srog"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

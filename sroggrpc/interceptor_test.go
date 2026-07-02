@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"srog"
-	"srog/sroggrpc"
+	"github.com/dvislobokov/srog"
+	"github.com/dvislobokov/srog/sroggrpc"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

@@ -19,7 +19,7 @@ func TestFromContextFallsBackToDefault(t *testing.T) {
 	if FromContext(context.Background()) != Default() {
 		t.Fatal("empty context should yield the default logger")
 	}
-	//nolint:staticcheck // deliberately exercising the nil-context guard
+	//lint:ignore SA1012 deliberately exercising the nil-context guard
 	if FromContext(nil) != Default() {
 		t.Fatal("nil context should yield the default logger")
 	}

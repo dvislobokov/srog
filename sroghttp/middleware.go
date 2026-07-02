@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"srog"
+	"github.com/dvislobokov/srog"
 )
 
 // Config controls middleware behavior. Construct it with Option values.

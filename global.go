@@ -1,6 +1,7 @@
 package srog
 
 import (
+	"context"
 	"os"
 	"sync/atomic"
 )
@@ -38,3 +39,39 @@ func Fatal(err error, tmpl string, args ...any) { global.Load().Fatal(err, tmpl,
 
 // ForContext derives an enriched logger from the package default.
 func ForContext(name string, value any) *Logger { return global.Load().ForContext(name, value) }
+
+// Context-first convenience functions. Each resolves the logger with Ctx — so it
+// carries both the request-scoped fields (RequestId, ...) and anything the
+// registered ContextFieldFuncs extract (trace_id, ...) — and logs through it,
+// without the handler keeping a local logger variable:
+//
+//	srog.InfoCtx(ctx, "charged {Amount}", 999)
+
+func VerboseCtx(ctx context.Context, tmpl string, args ...any) {
+	Ctx(ctx).Verbose(tmpl, args...)
+}
+
+func DebugCtx(ctx context.Context, tmpl string, args ...any) {
+	Ctx(ctx).Debug(tmpl, args...)
+}
+
+func InformationCtx(ctx context.Context, tmpl string, args ...any) {
+	Ctx(ctx).Information(tmpl, args...)
+}
+
+// InfoCtx is a shorthand alias for InformationCtx.
+func InfoCtx(ctx context.Context, tmpl string, args ...any) {
+	Ctx(ctx).Info(tmpl, args...)
+}
+
+func WarningCtx(ctx context.Context, tmpl string, args ...any) {
+	Ctx(ctx).Warning(tmpl, args...)
+}
+
+func ErrorCtx(ctx context.Context, err error, tmpl string, args ...any) {
+	Ctx(ctx).Error(err, tmpl, args...)
+}
+
+func FatalCtx(ctx context.Context, err error, tmpl string, args ...any) {
+	Ctx(ctx).Fatal(err, tmpl, args...)
+}

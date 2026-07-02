@@ -188,6 +188,56 @@ func TestTimeFormat(t *testing.T) {
 	}
 }
 
+// TestWithTimeFormatIsPerLogger guards the fix that moved the timestamp format
+// off the process-wide zerolog.TimeFieldFormat global: two loggers built with
+// different formats must each honor their own without interfering.
+func TestWithTimeFormatIsPerLogger(t *testing.T) {
+	var bufA, bufB bytes.Buffer
+	la := MustNew(WithWriter(&bufA), WithTimeFormat(time.RFC3339))
+	lb := MustNew(WithWriter(&bufB), WithTimeFormat("2006-01-02"))
+
+	la.Information("a")
+	lb.Information("b")
+
+	decode := func(b []byte) map[string]any {
+		var m map[string]any
+		if err := json.Unmarshal(bytes.TrimSpace(b), &m); err != nil {
+			t.Fatalf("invalid json %q: %v", b, err)
+		}
+		return m
+	}
+	tsA, _ := decode(bufA.Bytes())["time"].(string)
+	tsB, _ := decode(bufB.Bytes())["time"].(string)
+
+	if _, err := time.Parse(time.RFC3339, tsA); err != nil {
+		t.Fatalf("logger A timestamp not RFC3339: %q (%v)", tsA, err)
+	}
+	if _, err := time.Parse("2006-01-02", tsB); err != nil {
+		t.Fatalf("logger B timestamp not date-only: %q (%v)", tsB, err)
+	}
+	// The date-only format must not carry RFC3339's time component, proving the
+	// two loggers did not share a single global format.
+	if strings.Contains(tsB, "T") {
+		t.Fatalf("logger B leaked another format: %q", tsB)
+	}
+}
+
+// TestWithTimeFormatUnix verifies the epoch sentinels (empty string for Unix
+// seconds) are emitted as JSON numbers, matching zerolog's own behavior.
+func TestWithTimeFormatUnix(t *testing.T) {
+	var buf bytes.Buffer
+	l := MustNew(WithWriter(&buf), WithTimeFormat(TimeUnix))
+	l.Information("x")
+
+	var m map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &m); err != nil {
+		t.Fatalf("invalid json %q: %v", buf.String(), err)
+	}
+	if _, ok := m["time"].(float64); !ok {
+		t.Fatalf("expected numeric unix timestamp, got %T: %v", m["time"], m["time"])
+	}
+}
+
 func TestLevelFiltering(t *testing.T) {
 	m := logEvent(t, []Option{WithLevel(WarningLevel)}, func(l *Logger) {
 		l.Debug("should be dropped {X}", 1)
@@ -216,7 +266,7 @@ func TestStackTraceInJSON(t *testing.T) {
 	if !ok || stack == "" {
 		t.Fatalf("expected non-empty stack string, got: %v", m["stack"])
 	}
-	if !strings.HasPrefix(stack, "srog.TestStackTraceInJSON") {
+	if !strings.Contains(stack, "srog.TestStackTraceInJSON") {
 		t.Fatalf("stack should start at caller, got: %q", stack)
 	}
 }

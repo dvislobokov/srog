@@ -19,6 +19,9 @@ func main() {
 		srog.WithStackTrace(true),
 		srog.WithCaller(true),
 	)
-
-	log.Error(errors.New("some error"), "something bad happened")
+	log.Info("hello world, from user {@User}", Person{
+		Name: "John",
+		Age:  18,
+	})
+	log.Error(errors.New("some error"), "something bad happened цшер ")
 }

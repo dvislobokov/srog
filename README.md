@@ -6,6 +6,7 @@
 
 Write the message once. Get a human-readable line **and** typed structured fields — for free.
 
+[![CI](https://github.com/dvislobokov/srog/actions/workflows/ci.yml/badge.svg)](https://github.com/dvislobokov/srog/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/Go-1.23%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Built on zerolog](https://img.shields.io/badge/built%20on-zerolog-5C6BC0)](https://github.com/rs/zerolog)
 [![Templates](https://img.shields.io/badge/templates-Serilog--style-FF6F00)](https://messagetemplates.org/)
@@ -91,7 +92,7 @@ go get github.com/dvislobokov/srog
 ```go
 package main
 
-import "srog"
+import "github.com/dvislobokov/srog"
 
 func main() {
     log := srog.NewConsole() // colorized console at Debug, stack traces on
@@ -193,13 +194,65 @@ zero-config colorized console for local dev.
 ```go
 srog.WithLevel(srog.DebugLevel)
 srog.WithRenderedMessage(false)       // structured-only: 0 allocations/event
-srog.WithCaller(true)
+srog.WithCaller(true)                 // reports the real call site, not srog internals
 srog.WithTimestamp(true)
 srog.WithStackTrace(true)
-srog.WithTimeFormat(time.RFC3339Nano) // or zerolog.TimeFormatUnix for epoch
+srog.WithTimeFormat(srog.TimeRFC3339Nano) // or srog.TimeUnix for epoch
+
+// Reliability & throughput
+srog.WithErrorHandler(func(err error) { /* count / alert / fall back */ })
+srog.WithSampling(srog.BurstLimit(100, time.Second, srog.EveryN(100))) // flood control
+// ...and per file sink: srog.WithFile(path, srog.Async(4096)) to move I/O off the request path
 ```
 
 </details>
+
+<details>
+<summary><b>Context-scoped logging & trace correlation</b></summary>
+
+```go
+// Middleware stores a request-scoped logger; handlers pull it back out:
+srog.Ctx(ctx).Information("processing {OrderId}", id)
+srog.InfoCtx(ctx, "charged {Amount}", 999) // package-level shorthand
+
+// Register once so every Ctx/*Ctx log carries fields from the context
+// (the srogotel module ships an OpenTelemetry trace_id/span_id extractor):
+srog.AddContextField(func(ctx context.Context) []srog.Field { ... })
+```
+
+</details>
+
+## 🗂 Configuration from a file
+
+Everything above can also be declared in a `srog.Config` and loaded from JSON
+(or YAML — the struct carries `yaml` tags, so `gopkg.in/yaml.v3` decodes it
+without srog itself depending on a YAML parser):
+
+```json
+{
+  "level": "information",
+  "caller": true,
+  "stackTrace": true,
+  "timeFormat": "rfc3339nano",
+  "sinks": [
+    { "type": "console", "target": "stderr", "level": "debug" },
+    { "type": "file", "path": "/var/log/app.log", "level": "warning",
+      "rotation": { "maxSizeMB": 100, "maxBackups": 10, "compress": true, "every": "daily" } }
+  ]
+}
+```
+
+```go
+log, err := srog.NewFromConfigFile("logging.json")
+// or, to compose with programmatic options:
+cfg, _ := srog.LoadConfigFile("logging.json")
+opts, _ := cfg.Options()
+log, _ := srog.New(append(opts, srog.WithWriter(buf))...)
+```
+
+`level`/`format`/`every`/`timeFormat` accept the same friendly names shown
+throughout this README (case-insensitive); an unknown `timeFormat` is treated as
+a raw Go layout. Invalid values fail fast with an error from `Build`.
 
 ## ♻️ Rotation
 
@@ -259,9 +312,44 @@ JSON sinks emit newline-delimited JSON (NDJSON) with stable `time`, `level`, and
     Time_Format %Y-%m-%dT%H:%M:%S%z   # RFC3339 (srog default)
 ```
 
-For epoch timestamps, set `srog.WithTimeFormat(zerolog.TimeFormatUnixMs)` and let
+For epoch timestamps, set `srog.WithTimeFormat(srog.TimeUnixMs)` and let
 Fluent Bit handle the numeric `time` field. Console sinks are for humans and are
 not meant to be shipped.
+
+### ECS (Elastic Common Schema) — ELK out of the box
+
+For a zero-mapping path into Elasticsearch/Kibana, use the ECS sink format. It
+renames fields to the schema Kibana expects (`@timestamp`, `log.level`,
+`error.message`, `error.stack_trace`, `log.origin.file.*`) and injects
+`ecs.version`, so events index into a standard ES index with no Logstash rules:
+
+```go
+srog.WithFile("/var/log/app.log", srog.AsECS())   // or "format": "ecs" in Config
+```
+
+```json
+{"@timestamp":"2026-06-30T21:00:00Z","log.level":"error","message":"failed save",
+ "error.message":"boom","message_template.text":"failed {Op}","Op":"save","ecs.version":"8.11.0"}
+```
+
+The recommended shipping path stays **logger → NDJSON/ECS file → Filebeat/Fluent
+Bit → ES**; core srog does not open network connections itself.
+
+If you cannot run a shipper, the opt-in **`srog/srogelastic`** module writes
+directly to Elasticsearch's `_bulk` API — fully asynchronous, so it never blocks
+the application (Write only enqueues; a background worker batches, retries with
+backoff, and drops on a full queue). It depends only on the standard library:
+
+```go
+opt, sink, err := srogelastic.WithElasticsearch(srogelastic.Config{
+    Addresses: []string{"http://localhost:9200"},
+    Index:     "app-logs",
+    OnError:   func(err error) { /* metrics / alert */ },
+})
+if err != nil { /* ... */ }
+defer sink.Close() // flushes the queue on shutdown
+log := srog.MustNew(srog.WithConsole(), opt) // opt ships events as ECS
+```
 
 ## 🧵 Request-scoped logging
 
@@ -289,6 +377,13 @@ Every line then shares the same `RequestId`, so a single query pulls the whole r
 {"level":"info","RequestId":"f93e…401f","service":"billing","Amount":999,"message":"charging 999 cents"}
 {"level":"info","RequestId":"f93e…401f","status":200,"duration_ms":1.2,"Method":"GET","Path":"/checkout","message":"GET /checkout -> 200"}
 ```
+
+> **Integration modules.** The core library depends only on zerolog and
+> lumberjack. Framework integrations live in **separate modules** so their
+> dependencies never reach core: `srog/sroghttp` (stdlib, in-tree),
+> `srog/sroggrpc` (gRPC), `srog/srogecho` (Echo), `srog/srogotel`
+> (OpenTelemetry trace correlation), and `srog/srogelastic` (direct
+> Elasticsearch `_bulk` sink, stdlib-only). Import only what you use.
 
 ### HTTP middleware (`srog/sroghttp`)
 
