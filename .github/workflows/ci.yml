@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: "**/go.sum"
+      - name: Build & test every module
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The race detector needs cgo; enable it only where a C toolchain is
+          # present by default (the Linux runner).
+          race=""
+          if [ "${RUNNER_OS}" = "Linux" ]; then race="-race"; fi
+          # This is a multi-module repo (core + integration modules + examples),
+          # each with its own go.mod, so iterate over every module root.
+          modules=$(find . -name go.mod -exec dirname {} \; | sort)
+          for dir in $modules; do
+            echo "::group::$dir"
+            ( cd "$dir" && go build ./... && go test $race ./... )
+            echo "::endgroup::"
+          done
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: "**/go.sum"
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go vet (every module)
+        shell: bash
+        run: |
+          set -euo pipefail
+          modules=$(find . -name go.mod -exec dirname {} \; | sort)
+          for dir in $modules; do
+            echo "::group::vet $dir"
+            ( cd "$dir" && go vet ./... )
+            echo "::endgroup::"
+          done
+      - name: staticcheck (every module)
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck="$(go env GOPATH)/bin/staticcheck"
+          modules=$(find . -name go.mod -exec dirname {} \; | sort)
+          for dir in $modules; do
+            echo "::group::staticcheck $dir"
+            ( cd "$dir" && "$staticcheck" ./... )
+            echo "::endgroup::"
+          done
