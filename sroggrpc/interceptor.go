@@ -51,12 +51,12 @@ func newConfig(opts []Option) config {
 func UnaryServerInterceptor(log *srog.Logger, opts ...Option) grpc.UnaryServerInterceptor {
 	c := newConfig(opts)
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		ctx, rl, id := c.enrich(ctx, log)
+		ctx, _, id := c.enrich(ctx, log)
 		_ = grpc.SetHeader(ctx, metadata.Pairs(c.metaKey, id))
 
 		start := time.Now()
 		resp, err := handler(ctx, req)
-		c.logDone(rl, info.FullMethod, err, time.Since(start))
+		c.logDone(ctx, info.FullMethod, err, time.Since(start))
 		return resp, err
 	}
 }
@@ -66,12 +66,12 @@ func UnaryServerInterceptor(log *srog.Logger, opts ...Option) grpc.UnaryServerIn
 func StreamServerInterceptor(log *srog.Logger, opts ...Option) grpc.StreamServerInterceptor {
 	c := newConfig(opts)
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		ctx, rl, id := c.enrich(ss.Context(), log)
+		ctx, _, id := c.enrich(ss.Context(), log)
 		_ = grpc.SetHeader(ctx, metadata.Pairs(c.metaKey, id))
 
 		start := time.Now()
 		err := handler(srv, &wrappedStream{ServerStream: ss, ctx: ctx})
-		c.logDone(rl, info.FullMethod, err, time.Since(start))
+		c.logDone(ctx, info.FullMethod, err, time.Since(start))
 		return err
 	}
 }
@@ -87,10 +87,12 @@ func (c config) enrich(ctx context.Context, log *srog.Logger) (context.Context, 
 	return srog.NewContext(ctx, rl), rl, id
 }
 
-// logDone emits the completion event at a level chosen from the gRPC status code.
-func (c config) logDone(rl *srog.Logger, method string, err error, dur time.Duration) {
+// logDone emits the completion event at a level chosen from the gRPC status
+// code. It logs via srog.Ctx so registered context extractors (e.g. srogotel's
+// trace_id/span_id) enrich the access log just like handler logs.
+func (c config) logDone(ctx context.Context, method string, err error, dur time.Duration) {
 	code := status.Code(err)
-	done := rl.ForContextValues(map[string]any{
+	done := srog.Ctx(ctx).ForContextValues(map[string]any{
 		"method":      method,
 		"code":        code.String(),
 		"duration_ms": float64(dur.Microseconds()) / 1000.0,

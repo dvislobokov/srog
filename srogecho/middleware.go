@@ -95,7 +95,9 @@ func Middleware(log *srog.Logger, opts ...Option) echo.MiddlewareFunc {
 			ec.SetRequest(req.WithContext(rl.IntoContext(req.Context())))
 
 			if c.logStart {
-				rl.Information("--> {Method} {Path}", req.Method, req.URL.Path)
+				// Via Ctx so context extractors (e.g. srogotel trace_id/span_id)
+				// enrich the access log like handler logs do.
+				srog.Ctx(ec.Request().Context()).Information("--> {Method} {Path}", req.Method, req.URL.Path)
 			}
 
 			start := time.Now()
@@ -109,7 +111,7 @@ func Middleware(log *srog.Logger, opts ...Option) echo.MiddlewareFunc {
 			}
 			dur := time.Since(start)
 
-			done := rl.ForContextValues(map[string]any{
+			done := srog.Ctx(ec.Request().Context()).ForContextValues(map[string]any{
 				"status":      res.Status,
 				"bytes":       res.Size,
 				"remote":      ec.RealIP(),

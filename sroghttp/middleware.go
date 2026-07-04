@@ -69,7 +69,9 @@ func Middleware(log *srog.Logger, opts ...Option) func(http.Handler) http.Handle
 			r = r.WithContext(srog.NewContext(r.Context(), rl))
 
 			if c.logStart {
-				rl.Information("--> {Method} {Path}", r.Method, r.URL.Path)
+				// Log via Ctx so registered context extractors (e.g. srogotel's
+				// trace_id/span_id) enrich the access log just like handler logs.
+				srog.Ctx(r.Context()).Information("--> {Method} {Path}", r.Method, r.URL.Path)
 			}
 
 			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
@@ -77,7 +79,7 @@ func Middleware(log *srog.Logger, opts ...Option) func(http.Handler) http.Handle
 			next.ServeHTTP(sw, r)
 			dur := time.Since(start)
 
-			done := rl.ForContextValues(map[string]any{
+			done := srog.Ctx(r.Context()).ForContextValues(map[string]any{
 				"status":      sw.status,
 				"bytes":       sw.written,
 				"remote":      r.RemoteAddr,
