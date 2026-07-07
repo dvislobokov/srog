@@ -23,6 +23,7 @@ func main() {
 		srog.WithConsole(srog.MinLevel(srog.VerboseLevel)),
 		srog.WithCaller(true),
 		srog.WithStackTrace(true),
+		srog.WithFile("./log.jsonnd", srog.AsJSON(), srog.MinLevel(srog.VerboseLevel)),
 	)
 	defer log.Close()
 

@@ -1,0 +1,33 @@
+{
+  "level": "debug",
+  "caller": true,
+  "stackTrace": true,
+  "timeFormat": "rfc3339nano",
+  "sinks": [
+    { "type": "console", "target": "stdout", "level": "debug" },
+    { "type": "console", "target": "stderr", "level": "error", "noColor": true },
+    { "type": "stdout", "format": "json", "level": "information" },
+    { "type": "stderr", "format": "console", "level": "warning", "noColor": true },
+    { "type": "file", "path": "./logs/app.json.log", "format": "json", "level": "information" },
+    {
+      "type": "file",
+      "path": "./logs/app.ecs.log",
+      "format": "ecs",
+      "level": "information",
+      "rotation": {
+        "maxSizeMB": 50,
+        "maxBackups": 7,
+        "maxAgeDays": 14,
+        "compress": true,
+        "every": "daily"
+      }
+    },
+    {
+      "type": "file",
+      "path": "./logs/app.otel.log",
+      "format": "otel",
+      "level": "information",
+      "rotation": { "maxSizeMB": 100, "maxBackups": 24, "compress": true, "every": "hourly" }
+    }
+  ]
+}

@@ -13,6 +13,7 @@ go run .
 |---------|---------------|---------------|
 | [`basic`](basic) | Levels, message templates (named/positional/`@`/`$`, format & alignment), enrichment, error stacks | — |
 | [`config`](config) | Building a logger from a declarative JSON `srog.Config`; console + rotating ECS file | — |
+| [`formats`](formats) | Every output variant from one `logging.json`: console (stdout/stderr), raw JSON stream, and `json`/`ecs`/`otel` files with rotation | — |
 | [`nethttp`](nethttp) | **Logger injected via middleware into the request context, used in any handler** (stdlib `net/http` + `sroghttp`) | — |
 | [`echo`](echo) | Same request-scoped pattern with the Echo framework: `srogecho.Middleware`, `Recover`, `From` | `srogecho` |
 | [`grpc`](grpc) | gRPC server interceptor injecting a request-scoped logger; handler reads it from the call context | `sroggrpc` |

@@ -3,6 +3,7 @@ package srog
 import (
 	"io"
 	"os"
+	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -21,6 +22,10 @@ const (
 	// (@timestamp, log.level, error.message, ...), so events index cleanly into
 	// Elasticsearch and render in Kibana without a Logstash mapping.
 	FormatECS
+	// FormatOTel writes each event as a single OpenTelemetry log record encoded
+	// as OTLP/JSON (one LogRecord per line), so events feed straight into an
+	// OpenTelemetry logs pipeline (Collector -> Loki/Elastic/...).
+	FormatOTel
 )
 
 // sinkConfig is the resolved configuration for one output destination.
@@ -59,6 +64,10 @@ func AsConsole() SinkOption { return func(s *sinkConfig) { s.format = FormatCons
 
 // AsECS forces Elastic Common Schema NDJSON output for this sink (see FormatECS).
 func AsECS() SinkOption { return func(s *sinkConfig) { s.format = FormatECS } }
+
+// AsOTel forces OpenTelemetry OTLP/JSON log-record output for this sink (see
+// FormatOTel).
+func AsOTel() SinkOption { return func(s *sinkConfig) { s.format = FormatOTel } }
 
 // NoColor disables ANSI colors for a console sink.
 func NoColor() SinkOption { return func(s *sinkConfig) { s.noColor = true } }
@@ -146,6 +155,12 @@ func (s sinkConfig) build(gc *config) (io.Writer, io.Closer, error) {
 		w = consoleWriter{out: w, noColor: s.noColor, showStack: gc.stack}
 	case FormatECS:
 		w = ecsWriter{out: w}
+	case FormatOTel:
+		tf := time.RFC3339
+		if gc.timeFormatSet {
+			tf = gc.timeFormat
+		}
+		w = otelWriter{out: w, timeFormat: tf}
 	}
 
 	if s.async {

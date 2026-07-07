@@ -55,7 +55,8 @@ type SinkSpec struct {
 	Path string `json:"path,omitempty" yaml:"path,omitempty"`
 	// Level overrides the logger-wide minimum level for this sink only.
 	Level string `json:"level,omitempty" yaml:"level,omitempty"`
-	// Format overrides the sink's default serialization: "json" or "console".
+	// Format overrides the sink's default serialization: "json", "console",
+	// "ecs", or "otel" (OpenTelemetry OTLP/JSON log records).
 	Format string `json:"format,omitempty" yaml:"format,omitempty"`
 	// NoColor disables ANSI colors for a console sink.
 	NoColor bool `json:"noColor,omitempty" yaml:"noColor,omitempty"`
@@ -184,6 +185,8 @@ func (s SinkSpec) option() (Option, error) {
 			sinkOpts = append(sinkOpts, AsConsole())
 		case FormatECS:
 			sinkOpts = append(sinkOpts, AsECS())
+		case FormatOTel:
+			sinkOpts = append(sinkOpts, AsOTel())
 		}
 	}
 
@@ -265,8 +268,10 @@ func parseFormat(s string) (Format, error) {
 		return FormatConsole, nil
 	case "ecs":
 		return FormatECS, nil
+	case "otel", "opentelemetry", "otlp":
+		return FormatOTel, nil
 	default:
-		return 0, fmt.Errorf("unknown format %q (want json, console, or ecs)", s)
+		return 0, fmt.Errorf("unknown format %q (want json, console, ecs, or otel)", s)
 	}
 }
 

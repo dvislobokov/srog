@@ -254,6 +254,47 @@ log, _ := srog.New(append(opts, srog.WithWriter(buf))...)
 throughout this README (case-insensitive); an unknown `timeFormat` is treated as
 a raw Go layout. Invalid values fail fast with an error from `Build`.
 
+### Configuration reference
+
+**Top-level fields** (each maps 1:1 to a `With*` option; omit a field to keep its
+default):
+
+| Field | Type | Values | Default | Meaning |
+|-------|------|--------|---------|---------|
+| `level` | string | `verbose`/`trace`, `debug`, `information`/`info`, `warning`/`warn`, `error`, `fatal` | `information` | Logger-wide minimum level for sinks that don't set their own. |
+| `render` | bool | `true` / `false` | `true` | Render the human-readable `message` field. Turn off for max throughput when you only consume structured fields; console sinks need it on. |
+| `caller` | bool | `true` / `false` | `false` | Annotate each event with the calling `file:line`. |
+| `timestamp` | bool | `true` / `false` | `true` | Add a timestamp to each event. |
+| `stackTrace` | bool | `true` / `false` | `false` | Capture a call stack whenever an error is logged via `Error`/`Fatal`. |
+| `timeFormat` | string | `rfc3339`, `rfc3339nano`, `datetime`, `dateonly`, `timeonly`, `kitchen`, `unix`, `unixms`, `unixmicro`, `unixnano`, or a raw Go layout | `rfc3339` | Timestamp layout. The `unix*` names emit epoch numbers; the rest emit strings. |
+| `sinks` | array | see below | one JSON sink on stdout | Output destinations; each event fans out to every sink that admits its level. |
+
+**Sink fields** (each entry in `sinks`):
+
+| Field | Type | Values | Default | Meaning |
+|-------|------|--------|---------|---------|
+| `type` | string | `console`, `file`, `stdout`, `stderr` | — (**required**) | Destination kind. `stdout`/`stderr` write to the standard streams; `console` is a stream sink that defaults to the colorized console format. |
+| `target` | string | `stdout`, `stderr` | `stdout` | Which stream a `console` sink writes to. Ignored for other types. |
+| `path` | string | any file path | — (**required** for `file`) | File to write. The parent directory must already exist. |
+| `level` | string | same names as top-level `level` | inherits logger `level` | Per-sink minimum level, so one sink can show `debug` while another keeps only `warning`+. |
+| `format` | string | `json`, `console`/`text`, `ecs`, `otel`/`opentelemetry`/`otlp` | `console` for `type: console`, otherwise `json` | Serialization. `ecs` = Elastic Common Schema field names; `otel` = OpenTelemetry OTLP/JSON log records. |
+| `noColor` | bool | `true` / `false` | `false` | Disable ANSI colors (applies to the `console` format only). |
+| `rotation` | object | see below | none | Size/time/age rotation. `file` sinks only. |
+
+**Rotation fields** (`rotation` object on a `file` sink):
+
+| Field | Type | Values | Default | Meaning |
+|-------|------|--------|---------|---------|
+| `maxSizeMB` | int | ≥ 0 | `0` (no size trigger) | Roll over once the file exceeds this many megabytes. |
+| `maxBackups` | int | ≥ 0 | `0` (keep all) | Maximum number of rotated files to retain. |
+| `maxAgeDays` | int | ≥ 0 | `0` (no age limit) | Delete rotated files older than this many days. |
+| `compress` | bool | `true` / `false` | `false` | Gzip rotated files. |
+| `localTime` | bool | `true` / `false` | `false` | Timestamp backup names in local time instead of UTC. |
+| `every` | string | `none`/`""`, `hourly`, `daily` | `none` | Time-based rotation cadence, combined with the size trigger (first to fire wins). |
+
+See [`examples/formats`](examples/formats) for one `logging.json` that exercises
+every sink type and format at once.
+
 ## ♻️ Rotation
 
 `Rotate(srog.Rotation{...})` on a file sink combines size, time, and age
@@ -334,6 +375,32 @@ srog.WithFile("/var/log/app.log", srog.AsECS())   // or "format": "ecs" in Confi
 
 The recommended shipping path stays **logger → NDJSON/ECS file → Filebeat/Fluent
 Bit → ES**; core srog does not open network connections itself.
+
+### OpenTelemetry logs — OTLP/JSON out of the box
+
+For an OpenTelemetry logs pipeline, use the OTel sink format. Each event is
+written as a single OTLP/JSON log record (one `LogRecord` per line), mapped onto
+the [OpenTelemetry Logs Data Model](https://opentelemetry.io/docs/specs/otel/logs/data-model/):
+`time` → `timeUnixNano`, `level` → `severityNumber`/`severityText`, `message` →
+`body`, `trace_id`/`span_id` → `traceId`/`spanId`, and every remaining field
+becomes a typed `attributes` entry (`error` → `exception.message`, `stack` →
+`exception.stacktrace`, `caller` → `code.filepath`/`code.lineno`). This is the
+form the Collector's `otlpjson` receiver and file exporter read, so events feed
+straight into any OTel logs backend (Loki, Elastic, …):
+
+```go
+srog.WithFile("/var/log/app.log", srog.AsOTel())   // or "format": "otel" in Config
+```
+
+```json
+{"timeUnixNano":"1751317200000000000","severityNumber":17,"severityText":"ERROR",
+ "body":{"stringValue":"failed save"},"attributes":[{"key":"Op","value":{"stringValue":"save"}},
+ {"key":"exception.message","value":{"stringValue":"boom"}}]}
+```
+
+Pair it with **`srog/srogotel`** (`srogotel.Install()`) so context-scoped logs
+carry the active span's `trace_id`/`span_id` — the OTel writer then promotes them
+into `traceId`/`spanId`, joining logs to traces in your backend.
 
 If you cannot run a shipper, the opt-in **`srog/srogelastic`** module writes
 directly to Elasticsearch's `_bulk` API — fully asynchronous, so it never blocks
