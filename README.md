@@ -82,8 +82,9 @@ raw template so log pipelines can group events by their template identity — ex
 go get github.com/dvislobokov/srog
 ```
 
-> Requires Go 1.23+. The core package and `srog/sroghttp` depend only on
-> [zerolog](https://github.com/rs/zerolog) and
+> Requires Go 1.23+ (the `srog/srogotel` module requires Go 1.25+, dictated by
+> its OpenTelemetry dependencies). The core package and `srog/sroghttp` depend
+> only on [zerolog](https://github.com/rs/zerolog) and
 > [lumberjack](https://github.com/natefinch/lumberjack); `srog/sroggrpc` adds
 > `google.golang.org/grpc`.
 

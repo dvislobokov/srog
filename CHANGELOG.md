@@ -5,6 +5,21 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Submodules are versioned with prefixed tags (e.g. `srogotel/v1.1.0`).
 
+## [1.1.1] / srogelastic/v1.1.1 / sroggrpc/v1.1.1 / srogecho/v1.1.1 — 2026-07-14
+
+### Changed
+
+- **Minimum Go version lowered from 1.25 to 1.23** for the core module and the
+  `srogelastic`, `sroggrpc`, and `srogecho` submodules. To reach that floor,
+  minimum dependency versions were lowered accordingly (`golang.org/x/sys`
+  v0.30.0; in `sroggrpc`/`srogecho` also `grpc` v1.71.0, `x/net` v0.36.0,
+  `x/text` v0.22.0) — these are minimums, so builds with newer versions are
+  unaffected. `srogotel` still requires Go 1.25, dictated by its OpenTelemetry
+  dependencies (`otel` v1.44 / `log` v0.20).
+- `srogelastic`, `sroggrpc`, and `srogecho` get their first prefixed module tags
+  and now require `github.com/dvislobokov/srog v1.1.1` (previously the
+  unresolvable `v0.0.0`), so they install cleanly outside the repository.
+
 ## [1.1.0] / srogotel/v1.1.0 — 2026-07-14
 
 ### Added — core
