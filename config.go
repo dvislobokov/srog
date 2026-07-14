@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 )
 
 // Config is a declarative, serializable description of a Logger, suitable for
@@ -46,7 +47,8 @@ type Config struct {
 
 // SinkSpec is the serializable form of one sink.
 type SinkSpec struct {
-	// Type is "console", "file", "stdout", or "stderr". Required.
+	// Type is "console", "file", "stdout", "stderr", or any name registered via
+	// RegisterSinkType (e.g. "otlp" once srog/srogotel is imported). Required.
 	Type string `json:"type" yaml:"type"`
 	// Target selects the stream for a "console" sink: "stdout" (default) or
 	// "stderr". Ignored for other types.
@@ -62,6 +64,63 @@ type SinkSpec struct {
 	NoColor bool `json:"noColor,omitempty" yaml:"noColor,omitempty"`
 	// Rotation configures rotation/retention for a "file" sink.
 	Rotation *RotationSpec `json:"rotation,omitempty" yaml:"rotation,omitempty"`
+	// Options carries type-specific settings for sinks registered via
+	// RegisterSinkType; built-in types ignore it. Factories typically read it
+	// through DecodeOptions.
+	Options map[string]any `json:"options,omitempty" yaml:"options,omitempty"`
+}
+
+// DecodeOptions re-marshals the sink's Options map into v (a pointer to a struct
+// with json tags), so a SinkFactory can parse its type-specific settings without
+// touching the raw map. A nil Options leaves v unchanged.
+func (s SinkSpec) DecodeOptions(v any) error {
+	if s.Options == nil {
+		return nil
+	}
+	b, err := json.Marshal(s.Options)
+	if err != nil {
+		return fmt.Errorf("encode sink options: %w", err)
+	}
+	if err := json.Unmarshal(b, v); err != nil {
+		return fmt.Errorf("decode sink options: %w", err)
+	}
+	return nil
+}
+
+// SinkFactory builds the destination writer for an externally registered sink
+// type. cfg is the full Config being built, so a factory can inherit logger-wide
+// settings (such as TimeFormat); spec is the sink's own entry, with its
+// type-specific settings in spec.Options. The returned writer receives events
+// serialized in format (unless spec.Format overrides it); if the writer also
+// implements io.Closer it is closed by Logger.Close.
+type SinkFactory func(cfg Config, spec SinkSpec) (w io.Writer, format Format, err error)
+
+var (
+	sinkTypesMu sync.RWMutex
+	sinkTypes   = map[string]SinkFactory{}
+)
+
+// RegisterSinkType makes factory available to Config under the given type name
+// (case-insensitive), letting external modules plug their sinks into the
+// declarative JSON/YAML config. The built-in names (console, file, stdout,
+// stderr) always win and cannot be overridden. Modules typically register in
+// init, so importing e.g. srog/srogotel enables `"type": "otlp"`. Safe for
+// concurrent use; a repeated name replaces the earlier factory.
+func RegisterSinkType(name string, factory SinkFactory) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" || factory == nil {
+		return
+	}
+	sinkTypesMu.Lock()
+	sinkTypes[name] = factory
+	sinkTypesMu.Unlock()
+}
+
+// lookupSinkType returns the registered factory for name, or nil.
+func lookupSinkType(name string) SinkFactory {
+	sinkTypesMu.RLock()
+	defer sinkTypesMu.RUnlock()
+	return sinkTypes[name]
 }
 
 // RotationSpec is the serializable form of Rotation. Every is a friendly cadence
@@ -150,7 +209,7 @@ func (c Config) Options() ([]Option, error) {
 	}
 
 	for i, s := range c.Sinks {
-		o, err := s.option()
+		o, err := s.option(c)
 		if err != nil {
 			return nil, fmt.Errorf("srog: sinks[%d]: %w", i, err)
 		}
@@ -159,8 +218,9 @@ func (c Config) Options() ([]Option, error) {
 	return opts, nil
 }
 
-// option translates one SinkSpec into the matching With* Option.
-func (s SinkSpec) option() (Option, error) {
+// option translates one SinkSpec into the matching With* Option. parent is the
+// enclosing Config, passed through to registered sink factories.
+func (s SinkSpec) option(parent Config) (Option, error) {
 	var sinkOpts []SinkOption
 
 	if s.Level != "" {
@@ -219,7 +279,29 @@ func (s SinkSpec) option() (Option, error) {
 	case "stderr":
 		return WithWriter(os.Stderr, sinkOpts...), nil
 	default:
-		return nil, fmt.Errorf("unknown sink type %q", s.Type)
+		factory := lookupSinkType(strings.ToLower(strings.TrimSpace(s.Type)))
+		if factory == nil {
+			return nil, fmt.Errorf("unknown sink type %q", s.Type)
+		}
+		w, format, err := factory(parent, s)
+		if err != nil {
+			return nil, err
+		}
+		if w == nil {
+			return nil, fmt.Errorf("sink type %q returned no writer", s.Type)
+		}
+		return func(c *config) {
+			sc := sinkConfig{format: format, target: w}
+			// The factory owns the writer's lifecycle only until the logger is
+			// built; afterwards Logger.Close releases it.
+			if cl, ok := w.(io.Closer); ok {
+				sc.closer = cl
+			}
+			for _, o := range sinkOpts {
+				o(&sc)
+			}
+			c.sinks = append(c.sinks, sc)
+		}, nil
 	}
 }
 

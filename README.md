@@ -273,13 +273,14 @@ default):
 
 | Field | Type | Values | Default | Meaning |
 |-------|------|--------|---------|---------|
-| `type` | string | `console`, `file`, `stdout`, `stderr` | — (**required**) | Destination kind. `stdout`/`stderr` write to the standard streams; `console` is a stream sink that defaults to the colorized console format. |
+| `type` | string | `console`, `file`, `stdout`, `stderr`, or any name registered via `srog.RegisterSinkType` (e.g. `otlp` once `srog/srogotel` is imported) | — (**required**) | Destination kind. `stdout`/`stderr` write to the standard streams; `console` is a stream sink that defaults to the colorized console format. |
 | `target` | string | `stdout`, `stderr` | `stdout` | Which stream a `console` sink writes to. Ignored for other types. |
 | `path` | string | any file path | — (**required** for `file`) | File to write. The parent directory must already exist. |
 | `level` | string | same names as top-level `level` | inherits logger `level` | Per-sink minimum level, so one sink can show `debug` while another keeps only `warning`+. |
 | `format` | string | `json`, `console`/`text`, `ecs`, `otel`/`opentelemetry`/`otlp` | `console` for `type: console`, otherwise `json` | Serialization. `ecs` = Elastic Common Schema field names; `otel` = OpenTelemetry OTLP/JSON log records. |
 | `noColor` | bool | `true` / `false` | `false` | Disable ANSI colors (applies to the `console` format only). |
 | `rotation` | object | see below | none | Size/time/age rotation. `file` sinks only. |
+| `options` | object | type-specific | none | Settings for a sink type registered via `RegisterSinkType`; built-in types ignore it. See the `otlp` options under [OpenTelemetry logs](#opentelemetry-logs--otlpjson-out-of-the-box). |
 
 **Rotation fields** (`rotation` object on a `file` sink):
 
@@ -402,6 +403,67 @@ Pair it with **`srog/srogotel`** (`srogotel.Install()`) so context-scoped logs
 carry the active span's `trace_id`/`span_id` — the OTel writer then promotes them
 into `traceId`/`spanId`, joining logs to traces in your backend.
 
+To skip the file/shipper hop entirely, the **`srog/srogotel`** module also ships
+logs straight to the Collector over OTLP via the OTel Logs Bridge API. With a
+zero config it reuses the process-global `LoggerProvider` — the one you already
+configured next to your tracer/meter providers — so logs inherit the same
+exporter, resource (`service.name`, …), and batching:
+
+```go
+// Reuse the already-configured global LoggerProvider (traces/metrics setup):
+opt, sink, err := srogotel.WithLogs(ctx, srogotel.Config{})
+
+// ...or a specific provider: srogotel.Config{Provider: loggerProvider}
+
+// ...or build a private OTLP exporter with explicit parameters:
+opt, sink, err = srogotel.WithLogs(ctx, srogotel.Config{
+    Endpoint: "collector:4317",        // Protocol: "http" for OTLP/HTTP (4318)
+    Insecure: true,
+    Headers:  map[string]string{"authorization": "Bearer ..."},
+})
+
+if err != nil { /* ... */ }
+defer sink.Close() // flushes an owned provider on shutdown
+log := srog.MustNew(srog.WithConsole(), opt)
+```
+
+Each event is mapped onto the Logs Data Model exactly like the OTel writer above,
+and `trace_id`/`span_id` (from `srogotel.Install()`) become the record's trace
+context, so logs land in the Collector already joined to their traces. Batching,
+retries, and delivery are handled by the OTel SDK's `BatchProcessor`, off the
+logging hot path. See `examples/otel-logs` for a runnable end-to-end setup.
+
+The same sink is available from the declarative JSON config: importing
+`srog/srogotel` (a blank import works) registers the `otlp` sink type. An empty
+`options` object reuses the global `LoggerProvider`; setting `endpoint` builds a
+private exporter:
+
+```go
+import _ "github.com/dvislobokov/srog/srogotel" // registers "type": "otlp"
+```
+
+```json
+{"sinks": [
+  {"type": "otlp"},
+  {"type": "otlp", "level": "warning", "options": {
+      "endpoint": "collector:4317", "protocol": "grpc", "insecure": true,
+      "headers": {"authorization": "Bearer ..."}, "timeout": "10s",
+      "scopeName": "my-service",
+      "attributes": {"data_stream.dataset": "billing"}}}
+]}
+```
+
+The optional `attributes` map (also `Config.Attributes` in code) is stamped onto
+every record — use it for routing hints the Collector reads, such as
+`data_stream.dataset` or `elasticsearch.index` for the elasticsearch exporter's
+dynamic index. An event field with the same name wins over the static value.
+
+The sink parses srog's JSON events, so leave the entry's `format` at its default.
+Third-party sinks can plug into the config the same way — register a factory with
+`srog.RegisterSinkType(name, factory)` and read type-specific settings from the
+entry's `options` via `SinkSpec.DecodeOptions`; a writer that implements
+`io.Closer` is closed by `Logger.Close`.
+
 If you cannot run a shipper, the opt-in **`srog/srogelastic`** module writes
 directly to Elasticsearch's `_bulk` API — fully asynchronous, so it never blocks
 the application (Write only enqueues; a background worker batches, retries with
@@ -449,8 +511,8 @@ Every line then shares the same `RequestId`, so a single query pulls the whole r
 > lumberjack. Framework integrations live in **separate modules** so their
 > dependencies never reach core: `srog/sroghttp` (stdlib, in-tree),
 > `srog/sroggrpc` (gRPC), `srog/srogecho` (Echo), `srog/srogotel`
-> (OpenTelemetry trace correlation), and `srog/srogelastic` (direct
-> Elasticsearch `_bulk` sink, stdlib-only). Import only what you use.
+> (OpenTelemetry trace correlation + OTLP log export), and `srog/srogelastic`
+> (direct Elasticsearch `_bulk` sink, stdlib-only). Import only what you use.
 
 ### HTTP middleware (`srog/sroghttp`)
 

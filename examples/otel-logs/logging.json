@@ -1,0 +1,16 @@
+{
+  "level": "info",
+  "sinks": [
+    {"type": "console"},
+    {"type": "otlp"},
+    {"type": "otlp", "level": "warning", "options": {
+      "endpoint": "localhost:4317",
+      "protocol": "grpc",
+      "insecure": true,
+      "headers": {"authorization": "Bearer ..."},
+      "timeout": "10s",
+      "scopeName": "checkout",
+      "attributes": {"data_stream.dataset": "checkout"}
+    }}
+  ]
+}

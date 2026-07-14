@@ -18,6 +18,7 @@ go run .
 | [`echo`](echo) | Same request-scoped pattern with the Echo framework: `srogecho.Middleware`, `Recover`, `From` | `srogecho` |
 | [`grpc`](grpc) | gRPC server interceptor injecting a request-scoped logger; handler reads it from the call context | `sroggrpc` |
 | [`otel`](otel) | OpenTelemetry trace/log correlation — `trace_id`/`span_id` flow into logs via `srog.Ctx` | `srogotel` |
+| [`otel-logs`](otel-logs) | Shipping logs to an OTel Collector over OTLP via `srogotel.WithLogs` — reusing the global `LoggerProvider` or a private exporter | `srogotel` |
 | [`shared-convention`](shared-convention) | One `platformlog` package pins the correlation-id field/header/metadata for every service; the same id flows HTTP → gRPC with no handler changes | `sroggrpc` |
 | [`elk`](elk) | Direct, non-blocking shipping to Elasticsearch via `srogelastic` | `srogelastic` |
 

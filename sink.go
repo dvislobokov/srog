@@ -44,6 +44,9 @@ type sinkConfig struct {
 	target io.Writer
 	path   string
 	isFile bool
+	// closer, when set, is released by Logger.Close alongside file handles. It is
+	// how registered sink types (see RegisterSinkType) get their writer closed.
+	closer io.Closer
 }
 
 // SinkOption customizes a single sink (console, file, or writer).
@@ -148,6 +151,7 @@ func (s sinkConfig) build(gc *config) (io.Writer, io.Closer, error) {
 		}
 	default:
 		w = s.target
+		closer = s.closer
 	}
 
 	switch s.format {
