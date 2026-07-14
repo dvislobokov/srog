@@ -7,6 +7,8 @@
 Write the message once. Get a human-readable line **and** typed structured fields — for free.
 
 [![CI](https://github.com/dvislobokov/srog/actions/workflows/ci.yml/badge.svg)](https://github.com/dvislobokov/srog/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/dvislobokov/srog.svg)](https://pkg.go.dev/github.com/dvislobokov/srog)
+[![Go Report Card](https://goreportcard.com/badge/github.com/dvislobokov/srog)](https://goreportcard.com/report/github.com/dvislobokov/srog)
 [![Go](https://img.shields.io/badge/Go-1.23%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Built on zerolog](https://img.shields.io/badge/built%20on-zerolog-5C6BC0)](https://github.com/rs/zerolog)
 [![Templates](https://img.shields.io/badge/templates-Serilog--style-FF6F00)](https://messagetemplates.org/)
@@ -183,7 +185,36 @@ defer log.Close()                          // flush & close file sinks
 | `WithFile(path, ...)` | JSON           | file at `path`  |
 | `WithWriter(w, ...)`  | JSON           | any `io.Writer` |
 
-**Per-sink options:** `MinLevel(l)` · `AsJSON()` · `AsConsole()` · `NoColor()` · `Rotate(Rotation{...})`
+**Per-sink options:** `MinLevel(l)` · `AsJSON()` · `AsConsole()` · `AsECS()` · `AsOTel()` · `AsTemplate("...")` · `NoColor()` · `Rotate(Rotation{...})` · `Async(n)`
+
+**Output templates.** `AsTemplate` renders a sink through a Serilog-style output
+template — compose the line from placeholders, each supporting the same
+`,alignment` and `:format` specifiers as message templates:
+
+```go
+srog.WithConsole(srog.AsTemplate(
+    "[{Timestamp:15:04:05} {Level:u3}] {Message}{NewLine}{Exception}"))
+// 	[13:04:05 WRN] cache miss on user:42
+
+srog.WithFile("app.log", srog.AsTemplate(
+    "{Timestamp:rfc3339} level={Level:w} msg=\"{Message}\" {Properties}")) // logfmt-ish
+```
+
+| Placeholder | Renders |
+|---|---|
+| `{Timestamp[:layout]}` | Event time — Go layout, friendly name (`rfc3339`, `datetime`, …), or `.NET`-style (`HH:mm:ss`); bare prints the field as written |
+| `{Level[:u3\|w3\|u\|w]}` | `u3`/`w3` → `INF`/`inf`; `u`/`w` → `INFORMATION`/`information`; bare → `info` |
+| `{Message}` / `{MessageTemplate}` | Rendered message / raw `@mt` |
+| `{Exception}` | Error text, stack trace on the next line; empty when no error |
+| `{Caller}` | `file:line` (with `WithCaller(true)`) |
+| `{NewLine}` | `\n` |
+| `{Properties[:j]}` | Every field not otherwise consumed, as `k=v` pairs (`:j` → one JSON object) |
+| `{AnyField}` | Any event field by name — `{RequestId}`, `{Amount,10:.2f}`, … |
+
+Alignment pads (`{Level,-5:u3}` → `ERR  `), `{{`/`}}` escape braces, and a field
+absent from the event renders as empty. Fields not referenced by the template are
+omitted unless `{Properties}` is present — like a console sink, it is a
+presentation layer.
 
 With no sink option, the logger defaults to JSON on stdout. `New` returns an
 error if a file cannot be opened; `MustNew` panics instead; `NewConsole()` is a
@@ -278,7 +309,8 @@ default):
 | `target` | string | `stdout`, `stderr` | `stdout` | Which stream a `console` sink writes to. Ignored for other types. |
 | `path` | string | any file path | — (**required** for `file`) | File to write. The parent directory must already exist. |
 | `level` | string | same names as top-level `level` | inherits logger `level` | Per-sink minimum level, so one sink can show `debug` while another keeps only `warning`+. |
-| `format` | string | `json`, `console`/`text`, `ecs`, `otel`/`opentelemetry`/`otlp` | `console` for `type: console`, otherwise `json` | Serialization. `ecs` = Elastic Common Schema field names; `otel` = OpenTelemetry OTLP/JSON log records. |
+| `format` | string | `json`, `console`/`text`, `ecs`, `otel`/`opentelemetry`/`otlp`, `template` | `console` for `type: console`, otherwise `json` | Serialization. `ecs` = Elastic Common Schema field names; `otel` = OpenTelemetry OTLP/JSON log records; `template` = Serilog-style output template (requires `template`). |
+| `template` | string | output template | — | Serilog-style output template, e.g. `"[{Timestamp:15:04:05} {Level:u3}] {Message}{NewLine}{Exception}"`. Setting it implies `format: template`. |
 | `noColor` | bool | `true` / `false` | `false` | Disable ANSI colors (applies to the `console` format only). |
 | `rotation` | object | see below | none | Size/time/age rotation. `file` sinks only. |
 | `options` | object | type-specific | none | Settings for a sink type registered via `RegisterSinkType`; built-in types ignore it. See the `otlp` options under [OpenTelemetry logs](#opentelemetry-logs--otlpjson-out-of-the-box). |

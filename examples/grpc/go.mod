@@ -6,7 +6,7 @@ module github.com/dvislobokov/srog/examples/grpc
 go 1.25.0
 
 require (
-	github.com/dvislobokov/srog v0.0.0
+	github.com/dvislobokov/srog v1.1.1
 	github.com/dvislobokov/srog/sroggrpc v0.0.0
 	google.golang.org/grpc v1.81.1
 )
