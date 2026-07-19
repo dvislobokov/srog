@@ -505,13 +505,40 @@ backoff, and drops on a full queue). It depends only on the standard library:
 ```go
 opt, sink, err := srogelastic.WithElasticsearch(srogelastic.Config{
     Addresses: []string{"http://localhost:9200"},
-    Index:     "app-logs",
+    Index:     "app-logs-%{2006.01.02}", // %{…} = Go time layout, resolved per batch (UTC)
+    Gzip:      true,                     // compress bulk bodies
     OnError:   func(err error) { /* metrics / alert */ },
 })
 if err != nil { /* ... */ }
 defer sink.Close() // flushes the queue on shutdown
 log := srog.MustNew(srog.WithConsole(), opt) // opt ships events as ECS
 ```
+
+Delivery is resilient by default: network errors, `429` and `5xx` responses are
+retried with exponential backoff, and when a `_bulk` response reports partial
+failures only the rejected documents are resent — an accepted document is never
+duplicated and one poisoned document cannot sink a batch. Set
+`DataStream: true` to target a data stream (bulk actions switch to `create`).
+
+The module also registers itself with the declarative config, so importing it
+(blank import works) enables:
+
+```json
+{"sinks": [{
+    "type": "elasticsearch",
+    "options": {
+        "addresses": ["http://es:9200"],
+        "index": "app-logs-%{2006.01.02}",
+        "gzip": true,
+        "dataStream": false,
+        "username": "elastic", "password": "secret",
+        "batchSize": 500, "flushInterval": "5s", "timeout": "30s"
+    }
+}]}
+```
+
+Events default to ECS formatting; set the entry's `format` to override.
+`Logger.Close` flushes and closes the sink.
 
 ## 🧵 Request-scoped logging
 

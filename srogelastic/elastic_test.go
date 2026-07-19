@@ -1,6 +1,7 @@
 package srogelastic_test
 
 import (
+	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -126,6 +127,246 @@ func TestNonBlockingDrops(t *testing.T) {
 	}
 	if dropErr == nil || !strings.Contains(dropErr.Error(), "dropped") {
 		t.Fatalf("expected drop report via OnError, got %v", dropErr)
+	}
+}
+
+func TestRetryOn429(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests) // overloaded once
+			return
+		}
+		w.Write([]byte(`{"errors":false}`))
+	}))
+	defer srv.Close()
+
+	sink, _ := srogelastic.New(srogelastic.Config{
+		Addresses:  []string{srv.URL},
+		Index:      "logs",
+		MaxRetries: 3,
+	})
+	sink.Write([]byte(`{"x":1}`))
+	sink.Close()
+
+	if calls.Load() < 2 {
+		t.Fatalf("429 must be retried, got %d calls", calls.Load())
+	}
+	if sink.Failed() != 0 {
+		t.Fatalf("delivery should have eventually succeeded, failed=%d", sink.Failed())
+	}
+}
+
+func TestPerItemRetryResendsOnlyFailedDocs(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		if calls.Add(1) == 1 {
+			// First doc accepted, second rejected retryably (429).
+			w.Write([]byte(`{"errors":true,"items":[` +
+				`{"index":{"status":201}},` +
+				`{"index":{"status":429,"error":{"reason":"es_rejected_execution_exception"}}}]}`))
+			return
+		}
+		w.Write([]byte(`{"errors":false}`))
+	}))
+	defer srv.Close()
+
+	sink, _ := srogelastic.New(srogelastic.Config{
+		Addresses:  []string{srv.URL},
+		Index:      "logs",
+		MaxRetries: 3,
+	})
+	sink.Write([]byte(`{"a":1}`))
+	sink.Write([]byte(`{"b":2}`))
+	sink.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("expected 2 bulk requests, got %d", len(bodies))
+	}
+	// The retry must carry only the rejected document, not the accepted one.
+	if strings.Contains(bodies[1], `{"a":1}`) {
+		t.Fatalf("retry re-sent an already accepted doc:\n%s", bodies[1])
+	}
+	if !strings.Contains(bodies[1], `{"b":2}`) {
+		t.Fatalf("retry missing the rejected doc:\n%s", bodies[1])
+	}
+	if sink.Failed() != 0 {
+		t.Fatalf("all docs eventually delivered, failed=%d", sink.Failed())
+	}
+}
+
+func TestPermanentItemFailureNotRetried(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Write([]byte(`{"errors":true,"items":[` +
+			`{"index":{"status":400,"error":{"reason":"mapper_parsing_exception"}}}]}`))
+	}))
+	defer srv.Close()
+
+	var gotErr error
+	sink, _ := srogelastic.New(srogelastic.Config{
+		Addresses:  []string{srv.URL},
+		Index:      "logs",
+		MaxRetries: 3,
+		OnError:    func(err error) { gotErr = err },
+	})
+	sink.Write([]byte(`{"bad":true}`))
+	sink.Close()
+
+	if calls.Load() != 1 {
+		t.Fatalf("a 400 item must not be retried, got %d calls", calls.Load())
+	}
+	if sink.Failed() != 1 {
+		t.Fatalf("expected 1 permanently failed doc, got %d", sink.Failed())
+	}
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "permanent") {
+		t.Fatalf("expected item-failure report via OnError, got %v", gotErr)
+	}
+}
+
+func TestDataStreamUsesCreateAction(t *testing.T) {
+	var mu sync.Mutex
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		body = string(b)
+		mu.Unlock()
+		w.Write([]byte(`{"errors":false}`))
+	}))
+	defer srv.Close()
+
+	sink, _ := srogelastic.New(srogelastic.Config{
+		Addresses:  []string{srv.URL},
+		Index:      "logs-app-default",
+		DataStream: true,
+	})
+	sink.Write([]byte(`{"x":1}`))
+	sink.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(body, `{"create":{}}`) || strings.Contains(body, `{"index":{}}`) {
+		t.Fatalf("data stream bulk must use create actions:\n%s", body)
+	}
+}
+
+func TestDatedIndexPattern(t *testing.T) {
+	var mu sync.Mutex
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		path = r.URL.Path
+		mu.Unlock()
+		w.Write([]byte(`{"errors":false}`))
+	}))
+	defer srv.Close()
+
+	before := time.Now().UTC().Format("2006.01.02")
+	sink, _ := srogelastic.New(srogelastic.Config{
+		Addresses: []string{srv.URL},
+		Index:     "app-logs-%{2006.01.02}",
+	})
+	sink.Write([]byte(`{"x":1}`))
+	sink.Close()
+	after := time.Now().UTC().Format("2006.01.02")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if path != "/app-logs-"+before+"/_bulk" && path != "/app-logs-"+after+"/_bulk" {
+		t.Fatalf("dated index not resolved, path = %q", path)
+	}
+}
+
+func TestGzipBody(t *testing.T) {
+	var mu sync.Mutex
+	var encoding, body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Errorf("body is not gzip: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		b, _ := io.ReadAll(zr)
+		mu.Lock()
+		encoding = r.Header.Get("Content-Encoding")
+		body = string(b)
+		mu.Unlock()
+		w.Write([]byte(`{"errors":false}`))
+	}))
+	defer srv.Close()
+
+	sink, _ := srogelastic.New(srogelastic.Config{
+		Addresses: []string{srv.URL},
+		Index:     "logs",
+		Gzip:      true,
+	})
+	sink.Write([]byte(`{"x":1}`))
+	sink.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if encoding != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", encoding)
+	}
+	if !strings.Contains(body, `{"index":{}}`) || !strings.Contains(body, `{"x":1}`) {
+		t.Fatalf("decompressed bulk body wrong:\n%s", body)
+	}
+	if sink.Failed() != 0 {
+		t.Fatalf("failed=%d", sink.Failed())
+	}
+}
+
+func TestConfigSinkType(t *testing.T) {
+	var mu sync.Mutex
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		body = string(b)
+		mu.Unlock()
+		w.Write([]byte(`{"errors":false}`))
+	}))
+	defer srv.Close()
+
+	cfg, err := srog.LoadConfig(strings.NewReader(`{
+		"sinks": [{
+			"type": "elasticsearch",
+			"options": {
+				"addresses": ["` + srv.URL + `"],
+				"index": "app",
+				"flushInterval": "1h",
+				"batchSize": 100
+			}
+		}]
+	}`))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	log, err := cfg.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	log.Info("hello {Who}", "config")
+	log.Close() // must flush and close the registered sink
+
+	mu.Lock()
+	defer mu.Unlock()
+	// The factory defaults to ECS formatting.
+	for _, want := range []string{`"log.level":"info"`, `"message":"hello config"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("shipped doc missing %s:\n%s", want, body)
+		}
 	}
 }
 
