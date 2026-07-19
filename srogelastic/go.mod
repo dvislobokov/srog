@@ -4,7 +4,7 @@ module github.com/dvislobokov/srog/srogelastic
 
 go 1.23.0
 
-require github.com/dvislobokov/srog v1.1.1
+require github.com/dvislobokov/srog v1.2.0
 
 require (
 	github.com/mattn/go-colorable v0.1.14 // indirect

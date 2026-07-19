@@ -5,6 +5,45 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Submodules are versioned with prefixed tags (e.g. `srogotel/v1.1.0`).
 
+## [1.2.0] / srogelastic/v1.2.0 — 2026-07-19
+
+### Added
+
+- **Serilog-style output templates** — compose a sink's line from placeholders,
+  via `srog.AsTemplate(...)` or the `template` field in the declarative config:
+
+  ```go
+  srog.WithConsole(srog.AsTemplate(
+      "[{Timestamp:15:04:05} {Level:u3}] {Message}{NewLine}{Exception}"))
+  ```
+
+  ```json
+  {"type": "file", "path": "app.log",
+   "template": "{Timestamp:rfc3339} level={Level:w} msg=\"{Message}\" {Properties}"}
+  ```
+
+  Built-in placeholders: `{Timestamp[:layout]}`, `{Level[:u3|w3|u|w]}`,
+  `{Message}`, `{MessageTemplate}`, `{Exception}`, `{Caller}`, `{NewLine}`,
+  `{Properties[:j]}`, plus any event field by name — all with the same
+  `,alignment`/`:format` specifiers as message templates.
+
+- **srogelastic: resilient delivery** — `429 Too Many Requests` and `5xx`
+  responses are retried with backoff, and partial `_bulk` failures are retried
+  per document: only rejected items with a retryable status (429/5xx) are
+  resent, so accepted documents are never duplicated and a poisoned document
+  fails alone instead of sinking its batch.
+- **srogelastic: data streams** — `Config.DataStream` switches bulk actions to
+  `create` for indexing into Elasticsearch data streams.
+- **srogelastic: dated index patterns** — `Index` may embed Go time layouts as
+  `%{layout}` (e.g. `app-logs-%{2006.01.02}`), resolved in UTC per batch.
+- **srogelastic: gzip** — `Config.Gzip` compresses bulk request bodies
+  (`Content-Encoding: gzip`).
+- **srogelastic: declarative config** — importing the module registers the
+  `"elasticsearch"` (alias `"elastic"`) sink type with `srog.RegisterSinkType`,
+  so JSON/YAML configs can declare the sink via `options` (addresses, index,
+  auth, gzip, dataStream, batchSize, flushInterval, ...). Defaults to ECS
+  formatting; the logger's `Close` flushes and closes the sink.
+
 ## [1.1.1] / srogelastic/v1.1.1 / sroggrpc/v1.1.1 / srogecho/v1.1.1 — 2026-07-14
 
 ### Changed
