@@ -184,28 +184,36 @@ func renderValue(dst []byte, tok *token, val any) []byte {
 		dst = appendValue(dst, tok.format, val)
 	}
 
-	// Apply alignment by padding the just-written segment.
-	if tok.align != 0 {
-		written := len(dst) - start
-		pad := tok.align
-		left := pad < 0
-		if left {
-			pad = -pad
+	return padSegment(dst, start, tok.align)
+}
+
+// padSegment applies a ",alignment" specifier to dst[start:]: positive align
+// right-aligns (prepends spaces), negative left-aligns (appends spaces), zero is
+// a no-op. Segments already wider than the target are left untouched.
+func padSegment(dst []byte, start, align int) []byte {
+	if align == 0 {
+		return dst
+	}
+	written := len(dst) - start
+	pad := align
+	left := pad < 0
+	if left {
+		pad = -pad
+	}
+	if written >= pad {
+		return dst
+	}
+	gap := pad - written
+	if left {
+		for i := 0; i < gap; i++ {
+			dst = append(dst, ' ')
 		}
-		if written < pad {
-			gap := pad - written
-			if left {
-				for i := 0; i < gap; i++ {
-					dst = append(dst, ' ')
-				}
-			} else {
-				// Right-align: shift segment and prepend spaces.
-				dst = append(dst, make([]byte, gap)...)
-				copy(dst[start+gap:], dst[start:start+written])
-				for i := 0; i < gap; i++ {
-					dst[start+i] = ' '
-				}
-			}
+	} else {
+		// Right-align: shift segment and prepend spaces.
+		dst = append(dst, make([]byte, gap)...)
+		copy(dst[start+gap:], dst[start:start+written])
+		for i := 0; i < gap; i++ {
+			dst[start+i] = ' '
 		}
 	}
 	return dst

@@ -26,6 +26,11 @@ const (
 	// as OTLP/JSON (one LogRecord per line), so events feed straight into an
 	// OpenTelemetry logs pipeline (Collector -> Loki/Elastic/...).
 	FormatOTel
+	// FormatTemplate renders each event through a Serilog-style output template
+	// supplied with AsTemplate — literal text plus placeholders like
+	// {Timestamp:15:04:05}, {Level:u3}, {Message}, {Properties}, or any event
+	// field by name, each honoring ",alignment" and ":format" specifiers.
+	FormatTemplate
 )
 
 // sinkConfig is the resolved configuration for one output destination.
@@ -47,6 +52,9 @@ type sinkConfig struct {
 	// closer, when set, is released by Logger.Close alongside file handles. It is
 	// how registered sink types (see RegisterSinkType) get their writer closed.
 	closer io.Closer
+
+	// template is the output template for FormatTemplate sinks.
+	template string
 }
 
 // SinkOption customizes a single sink (console, file, or writer).
@@ -71,6 +79,21 @@ func AsECS() SinkOption { return func(s *sinkConfig) { s.format = FormatECS } }
 // AsOTel forces OpenTelemetry OTLP/JSON log-record output for this sink (see
 // FormatOTel).
 func AsOTel() SinkOption { return func(s *sinkConfig) { s.format = FormatOTel } }
+
+// AsTemplate renders this sink through a Serilog-style output template (see
+// FormatTemplate). The classic console layout, for example:
+//
+//	srog.WithConsole(srog.AsTemplate("[{Timestamp:15:04:05} {Level:u3}] {Message}{NewLine}{Exception}"))
+//
+// Built-in placeholders: {Timestamp[:layout]}, {Level[:u3|w3|u|w]}, {Message},
+// {MessageTemplate}, {Exception}, {Caller}, {NewLine}, {Properties[:j]}; any
+// other name prints that event field. All support ",alignment" (e.g.
+// {Level,-7}) and use "{{"/"}}" for literal braces. Malformed holes render as
+// literal text, matching message-template behavior. Structured fields not
+// referenced by the template are omitted unless {Properties} is present.
+func AsTemplate(tmpl string) SinkOption {
+	return func(s *sinkConfig) { s.format = FormatTemplate; s.template = tmpl }
+}
 
 // NoColor disables ANSI colors for a console sink.
 func NoColor() SinkOption { return func(s *sinkConfig) { s.noColor = true } }
@@ -165,6 +188,12 @@ func (s sinkConfig) build(gc *config) (io.Writer, io.Closer, error) {
 			tf = gc.timeFormat
 		}
 		w = otelWriter{out: w, timeFormat: tf}
+	case FormatTemplate:
+		tf := time.RFC3339
+		if gc.timeFormatSet {
+			tf = gc.timeFormat
+		}
+		w = newOutputTemplateWriter(w, s.template, tf)
 	}
 
 	if s.async {

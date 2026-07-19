@@ -58,8 +58,13 @@ type SinkSpec struct {
 	// Level overrides the logger-wide minimum level for this sink only.
 	Level string `json:"level,omitempty" yaml:"level,omitempty"`
 	// Format overrides the sink's default serialization: "json", "console",
-	// "ecs", or "otel" (OpenTelemetry OTLP/JSON log records).
+	// "ecs", "otel" (OpenTelemetry OTLP/JSON log records), or "template"
+	// (Serilog-style output template; requires Template).
 	Format string `json:"format,omitempty" yaml:"format,omitempty"`
+	// Template is a Serilog-style output template (see AsTemplate), e.g.
+	// "[{Timestamp:15:04:05} {Level:u3}] {Message}{NewLine}{Exception}".
+	// Setting it implies Format "template".
+	Template string `json:"template,omitempty" yaml:"template,omitempty"`
 	// NoColor disables ANSI colors for a console sink.
 	NoColor bool `json:"noColor,omitempty" yaml:"noColor,omitempty"`
 	// Rotation configures rotation/retention for a "file" sink.
@@ -247,7 +252,14 @@ func (s SinkSpec) option(parent Config) (Option, error) {
 			sinkOpts = append(sinkOpts, AsECS())
 		case FormatOTel:
 			sinkOpts = append(sinkOpts, AsOTel())
+		case FormatTemplate:
+			if s.Template == "" {
+				return nil, errors.New(`format "template" requires a "template" string`)
+			}
 		}
+	}
+	if s.Template != "" {
+		sinkOpts = append(sinkOpts, AsTemplate(s.Template))
 	}
 
 	switch strings.ToLower(strings.TrimSpace(s.Type)) {
@@ -352,8 +364,10 @@ func parseFormat(s string) (Format, error) {
 		return FormatECS, nil
 	case "otel", "opentelemetry", "otlp":
 		return FormatOTel, nil
+	case "template":
+		return FormatTemplate, nil
 	default:
-		return 0, fmt.Errorf("unknown format %q (want json, console, ecs, or otel)", s)
+		return 0, fmt.Errorf("unknown format %q (want json, console, ecs, otel, or template)", s)
 	}
 }
 
